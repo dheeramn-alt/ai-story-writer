@@ -1,0 +1,7 @@
+{
+  "name": "StoryForge: AI Product Design Assistant",
+  "description": "A high-performance story writing and product development agent that connects Figma designs with technical specifications using Gemini 3 Pro and MCP-inspired tool integration.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
