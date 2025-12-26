@@ -30,18 +30,29 @@ export interface FigmaFile {
   thumbnailUrl: string;
 }
 
+export interface Story {
+  id: string;
+  title: string;
+  content: string;
+  status: 'draft' | 'in-progress' | 'complete';
+  timestamp: number;
+  figmaFrames: string[]; // IDs
+}
+
+export interface Epic {
+  id: string;
+  title: string;
+  description: string;
+  stories: Story[];
+  timestamp: number;
+}
+
 export interface StoryPart {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
   figmaRef?: string;
-}
-
-export interface MCPTool {
-  name: string;
-  description: string;
-  parameters: any;
 }
 
 export interface Collaborator {
