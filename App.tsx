@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Plus, 
@@ -47,7 +46,14 @@ import {
   X,
   Sparkles,
   PanelRightClose,
-  PanelRightOpen
+  PanelRightOpen,
+  Wand2,
+  ListChecks,
+  Languages,
+  LayoutTemplate,
+  Bookmark,
+  BookmarkCheck,
+  Star
 } from 'lucide-react';
 import { MCPStatus, StoryPart, FigmaFrame, Collaborator, RemoteCursor, FigmaFile, Version, MCPLogEntry, MCPLogSeverity, Epic, Story } from './types';
 import { geminiService } from './services/geminiService';
@@ -66,6 +72,29 @@ const COLLABORATORS: Collaborator[] = [
   { id: 'u1', name: 'Sarah (Design)', color: '#F24E1E', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah', isOnline: true },
   { id: 'u2', name: 'Mike (Dev)', color: '#A259FF', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Mike', isOnline: true },
   { id: 'u3', name: 'Alex (PM)', color: '#0ACF83', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Alex', isOnline: false },
+];
+
+const STORY_TEMPLATES = [
+  {
+    id: 'user-story',
+    name: 'Standard User Story',
+    content: '# User Story\n\n**As a** [user type],\n**I want** [action],\n**So that** [benefit].\n\n## Acceptance Criteria\n- [ ] AC1\n- [ ] AC2\n\n## Technical Notes\n- Add context here...'
+  },
+  {
+    id: 'job-story',
+    name: 'Job Story (JTBD)',
+    content: '# Job Story\n\n**When** [situation],\n**I want to** [motivation],\n**So I can** [expected outcome].\n\n## Success Metrics\n- Metric 1...'
+  },
+  {
+    id: 'tech-spec',
+    name: 'Technical Spec',
+    content: '# Technical Specification\n\n## Problem Statement\nSummary of the problem...\n\n## Proposed Solution\nHow we will solve it...\n\n## Implementation Details\n- Component updates\n- Database changes\n- API modifications'
+  },
+  {
+    id: 'bug-report',
+    name: 'Bug Report',
+    content: '# Bug Report\n\n## Steps to Reproduce\n1. \n2. \n\n## Expected Result\nWhat should happen...\n\n## Actual Result\nWhat is happening...\n\n## Environment\n- Browser: \n- Version: '
+  }
 ];
 
 const INITIAL_EPICS: Epic[] = [
@@ -111,6 +140,9 @@ const App: React.FC = () => {
   const [movingStoryId, setMovingStoryId] = useState<string | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, selection: string } | null>(null);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [defaultTemplateId, setDefaultTemplateId] = useState<string | null>(localStorage.getItem('defaultTemplateId'));
 
   // Enhanced MCP State
   const [mcpStatus, setMcpStatus] = useState<MCPStatus>(MCPStatus.DISCONNECTED);
@@ -139,6 +171,18 @@ const App: React.FC = () => {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // Close context menu/picker on click elsewhere
+  useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent) => {
+      setContextMenu(null);
+      if (showTemplatePicker && !(e.target as HTMLElement).closest('.template-picker-container')) {
+        setShowTemplatePicker(false);
+      }
+    };
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, [showTemplatePicker]);
 
   const addMcpLog = useCallback((message: string, severity: MCPLogSeverity = 'info') => {
     setMcpLogs(prev => [
@@ -192,16 +236,20 @@ const App: React.FC = () => {
     saveNewVersion(`Restored to ${new Date(version.timestamp).toLocaleTimeString()}`);
   };
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || isGenerating || !activeStory) return;
-    const userMessage: StoryPart = { id: Date.now().toString(), role: 'user', content: input, timestamp: Date.now() };
+  const handleSendMessage = async (customPrompt?: string) => {
+    const textToSend = customPrompt || input;
+    if (!textToSend.trim() || isGenerating || !activeStory) return;
+    
+    const userMessage: StoryPart = { id: Date.now().toString(), role: 'user', content: textToSend, timestamp: Date.now() };
     setMessages(prev => [...prev, userMessage]);
-    setInput('');
+    if (!customPrompt) setInput('');
     setIsGenerating(true);
+    setShowChatSidebar(true);
+
     try {
       const historyItems = messages.map(m => ({ role: m.role, content: m.content }));
-      const systemInstruction = `You are StoryForge AI. You are helping Mike refine the User Story: "${activeStory.title}" within the Epic: "${activeEpic?.title}". Help with technical details, acceptance criteria, or design feedback.`;
-      const result = await geminiService.generateStory(input, historyItems, systemInstruction);
+      const systemInstruction = `You are StoryForge AI. You are helping Mike refine the User Story: "${activeStory.title}" within the Epic: "${activeEpic?.title}". Help with technical details, acceptance criteria, or design feedback. If specific text is provided for analysis, focus on clarifying or improving that segment.`;
+      const result = await geminiService.generateStory(textToSend, historyItems, systemInstruction);
       const assistantMessage: StoryPart = { id: (Date.now() + 1).toString(), role: 'assistant', content: result.text || 'Analysis complete.', timestamp: Date.now() };
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
@@ -228,6 +276,38 @@ const App: React.FC = () => {
     }
   };
 
+  const handleEditorContextMenu = (e: React.MouseEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    const selection = target.value.substring(start, end);
+
+    if (selection.trim()) {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, selection });
+    }
+  };
+
+  const analyzeSelection = (action: 'analyze' | 'criteria' | 'simplify') => {
+    if (!contextMenu) return;
+    const selection = contextMenu.selection;
+    setContextMenu(null);
+
+    let prompt = "";
+    switch (action) {
+      case 'analyze':
+        prompt = `Analyze this requirement for technical feasibility and clarity: "${selection}"`;
+        break;
+      case 'criteria':
+        prompt = `Generate specific acceptance criteria for this feature description: "${selection}"`;
+        break;
+      case 'simplify':
+        prompt = `Rewrite this for better readability and remove ambiguity: "${selection}"`;
+        break;
+    }
+    handleSendMessage(prompt);
+  };
+
   const openEpic = (epicId: string) => {
     setActiveEpicId(epicId);
     setActiveStoryId(null);
@@ -238,7 +318,7 @@ const App: React.FC = () => {
     setActiveStoryId(storyId);
     setViewMode('editor');
     setVersions([]); 
-    setMessages([]); // Clear chat history for the new story
+    setMessages([]);
   };
 
   const goBack = () => {
@@ -276,10 +356,15 @@ const App: React.FC = () => {
   };
 
   const addNewStory = (epicId: string) => {
+    let initialContent = '# New Story\n\nStart writing or use AI to draft...';
+    if (defaultTemplateId) {
+      const template = STORY_TEMPLATES.find(t => t.id === defaultTemplateId);
+      if (template) initialContent = template.content;
+    }
     const newStory: Story = {
       id: `s-${Date.now()}`,
       title: 'New Story Draft',
-      content: '# New Story\n\nStart writing or use AI to draft...',
+      content: initialContent,
       status: 'draft',
       timestamp: Date.now(),
       figmaFrames: []
@@ -307,11 +392,29 @@ const App: React.FC = () => {
     }
   };
 
+  const toggleDefaultTemplate = (e: React.MouseEvent, templateId: string) => {
+    e.stopPropagation();
+    const newDefaultId = defaultTemplateId === templateId ? null : templateId;
+    setDefaultTemplateId(newDefaultId);
+    if (newDefaultId) {
+      localStorage.setItem('defaultTemplateId', newDefaultId);
+    } else {
+      localStorage.removeItem('defaultTemplateId');
+    }
+  };
+
+  const applyTemplate = (content: string) => {
+    if (activeStory && (activeStory.content.length < 50 || window.confirm('Overwrite current content with this template?'))) {
+      updateStoryContent(content);
+      saveNewVersion("Template Applied");
+      setShowTemplatePicker(false);
+    }
+  };
+
   const moveStoryToEpic = (storyId: string, sourceEpicId: string, targetEpicId: string) => {
     const sourceEpic = epics.find(e => e.id === sourceEpicId);
     const storyToMove = sourceEpic?.stories.find(s => s.id === storyId);
     if (!storyToMove) return;
-
     setEpics(prev => prev.map(e => {
       if (e.id === sourceEpicId) {
         return { ...e, stories: e.stories.filter(s => s.id !== storyId) };
@@ -466,24 +569,15 @@ const App: React.FC = () => {
 
         <main className="flex-1 overflow-hidden flex">
           {viewMode === 'listing' ? (
-            /* Dashboard View */
             <div className="flex-1 overflow-y-auto p-8 lg:p-12">
               <div className="max-w-6xl mx-auto">
                 <div className="flex items-center justify-between mb-8">
                   <div>
-                    <h1 className="text-2xl font-bold text-white mb-2">
-                      {activeEpicId ? activeEpic?.title : 'Project Workspace'}
-                    </h1>
-                    <p className="text-slate-500 text-sm">
-                      {activeEpicId ? activeEpic?.description : 'Manage your product development cycle with nested epics and stories.'}
-                    </p>
+                    <h1 className="text-2xl font-bold text-white mb-2">{activeEpicId ? activeEpic?.title : 'Project Workspace'}</h1>
+                    <p className="text-slate-500 text-sm">{activeEpicId ? activeEpic?.description : 'Manage your product development cycle with nested epics and stories.'}</p>
                   </div>
-                  <button 
-                    onClick={() => activeEpicId ? addNewStory(activeEpicId) : addNewEpic()}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-sm shadow-xl shadow-indigo-600/20 transition-all active:scale-95"
-                  >
-                    <Plus className="w-4 h-4" />
-                    {activeEpicId ? 'New User Story' : 'New Product Epic'}
+                  <button onClick={() => activeEpicId ? addNewStory(activeEpicId) : addNewEpic()} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-sm shadow-xl shadow-indigo-600/20 transition-all active:scale-95">
+                    <Plus className="w-4 h-4" /> {activeEpicId ? 'New User Story' : 'New Product Epic'}
                   </button>
                 </div>
 
@@ -495,15 +589,10 @@ const App: React.FC = () => {
                           <button onClick={(e) => deleteEpic(e, epic.id)} className="p-1.5 hover:bg-rose-500/20 text-slate-500 hover:text-rose-500 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
                           <MoreHorizontal className="w-5 h-5 text-slate-500" />
                         </div>
-                        <div className="w-12 h-12 bg-amber-500/10 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                          <FolderKanban className="w-6 h-6 text-amber-500" />
-                        </div>
+                        <div className="w-12 h-12 bg-amber-500/10 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform"><FolderKanban className="w-6 h-6 text-amber-500" /></div>
                         <h3 className="text-lg font-bold text-white mb-2">{epic.title}</h3>
                         <p className="text-slate-500 text-sm line-clamp-2 mb-6">{epic.description}</p>
-                        <div className="flex items-center justify-between mt-auto text-xs text-slate-400 font-bold">
-                           <span>{epic.stories.length} stories</span>
-                           <ChevronRight className="w-4 h-4" />
-                        </div>
+                        <div className="flex items-center justify-between mt-auto text-xs text-slate-400 font-bold"><span>{epic.stories.length} stories</span><ChevronRight className="w-4 h-4" /></div>
                       </div>
                     ))}
                   </div>
@@ -520,10 +609,7 @@ const App: React.FC = () => {
                                <button disabled={sIdx === activeEpic.stories.length - 1} onClick={(e) => { e.stopPropagation(); reorderStory(activeEpic.id, story.id, 'down'); }} className="p-0.5 hover:bg-slate-700 rounded"><ArrowDown className="w-3 h-3" /></button>
                             </div>
                             <div className="w-10 h-10 bg-indigo-500/10 rounded-lg flex items-center justify-center"><FileText className="w-5 h-5 text-indigo-400" /></div>
-                            <div>
-                              <h4 className="font-bold text-slate-200">{story.title}</h4>
-                              <p className="text-[10px] text-slate-500 font-mono">ID: {story.id}</p>
-                            </div>
+                            <div><h4 className="font-bold text-slate-200">{story.title}</h4><p className="text-[10px] text-slate-500 font-mono">ID: {story.id}</p></div>
                           </div>
                           
                           {movingStoryId === story.id ? (
@@ -552,11 +638,8 @@ const App: React.FC = () => {
               </div>
             </div>
           ) : (
-            /* Inner Story Page: Editor + Side Chat */
             <div className="flex-1 flex overflow-hidden">
-              {/* Main Editor Pane */}
               <div className="flex-1 flex flex-col relative bg-[#0b0f1a] border-r border-slate-800">
-                {/* Editor Header Toolbar */}
                 <div className="h-12 border-b border-slate-800/60 bg-[#0f172a] flex items-center justify-between px-6 z-10">
                   <div className="flex items-center gap-4">
                     <button 
@@ -568,7 +651,48 @@ const App: React.FC = () => {
                       Draft with AI
                     </button>
                     <div className="h-4 w-[1px] bg-slate-800"></div>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Markdown Editor</span>
+                    
+                    <div className="relative template-picker-container">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setShowTemplatePicker(!showTemplatePicker); }}
+                        className={`flex items-center gap-2 px-3 py-1 rounded-lg text-[11px] font-bold transition-all active:scale-95 ${showTemplatePicker ? 'bg-slate-700 text-white' : 'bg-slate-800/60 text-slate-300 hover:bg-slate-700 hover:text-white'}`}
+                      >
+                        <LayoutTemplate className="w-3 h-3" />
+                        Templates
+                        <ChevronRight className={`w-3 h-3 transition-transform ${showTemplatePicker ? 'rotate-90' : ''}`} />
+                      </button>
+
+                      {showTemplatePicker && (
+                        <div className="absolute top-full left-0 mt-2 w-64 bg-[#1e293b] border border-slate-700 shadow-2xl rounded-xl py-2 overflow-hidden animate-in fade-in zoom-in-95 duration-100 z-50">
+                          <div className="px-3 py-1.5 border-b border-slate-700 mb-1 flex items-center justify-between">
+                            <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Story Templates</p>
+                            <span className="text-[8px] text-slate-500 uppercase font-bold flex items-center gap-1"><Star className="w-2 h-2 text-amber-500 fill-amber-500" /> Default</span>
+                          </div>
+                          {STORY_TEMPLATES.map((template) => (
+                            <button 
+                              key={template.id}
+                              onClick={() => applyTemplate(template.content)}
+                              className="w-full px-3 py-2 text-left hover:bg-slate-700 flex items-center justify-between group/item transition-colors"
+                            >
+                              <span className="text-xs text-slate-200">{template.name}</span>
+                              <div className="flex items-center gap-2">
+                                {defaultTemplateId === template.id && <Star className="w-3 h-3 text-amber-500 fill-amber-500" />}
+                                <button 
+                                  onClick={(e) => toggleDefaultTemplate(e, template.id)}
+                                  className={`p-1 rounded hover:bg-slate-600 opacity-0 group-hover/item:opacity-100 transition-opacity ${defaultTemplateId === template.id ? 'text-amber-500' : 'text-slate-500'}`}
+                                  title="Set as default"
+                                >
+                                  <Star className={`w-3 h-3 ${defaultTemplateId === template.id ? 'fill-amber-500' : ''}`} />
+                                </button>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="h-4 w-[1px] bg-slate-800"></div>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Markdown</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-[10px] text-slate-500 font-bold italic">{versions.length > 0 ? `Last save ${formatTime(versions[0].timestamp)}` : 'Draft'}</span>
@@ -588,6 +712,7 @@ const App: React.FC = () => {
                       ref={editorRef}
                       value={selectedVersionId ? (previewVersion?.content || '') : activeStory?.content}
                       onChange={(e) => !selectedVersionId && updateStoryContent(e.target.value)}
+                      onContextMenu={handleEditorContextMenu}
                       readOnly={!!selectedVersionId}
                       spellCheck={false}
                       className="w-full h-full bg-transparent border-none focus:ring-0 text-slate-300 font-mono text-sm leading-relaxed resize-none p-0"
@@ -595,25 +720,32 @@ const App: React.FC = () => {
                     />
                   </div>
                 </div>
+
+                {contextMenu && (
+                  <div 
+                    className="fixed z-50 bg-[#1e293b] border border-slate-700 shadow-2xl rounded-xl py-2 w-56 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                  >
+                    <div className="px-3 py-1.5 border-b border-slate-700 mb-1"><p className="text-[9px] font-black uppercase text-indigo-400 tracking-widest">AI Context Actions</p></div>
+                    <button onClick={() => analyzeSelection('analyze')} className="w-full px-3 py-2 text-left text-xs text-slate-200 hover:bg-indigo-600 flex items-center gap-3 transition-colors"><Wand2 className="w-3.5 h-3.5" /> Analyze requirement</button>
+                    <button onClick={() => analyzeSelection('criteria')} className="w-full px-3 py-2 text-left text-xs text-slate-200 hover:bg-indigo-600 flex items-center gap-3 transition-colors"><ListChecks className="w-3.5 h-3.5" /> Generate criteria</button>
+                    <button onClick={() => analyzeSelection('simplify')} className="w-full px-3 py-2 text-left text-xs text-slate-200 hover:bg-indigo-600 flex items-center gap-3 transition-colors"><Languages className="w-3.5 h-3.5" /> Simplify phrasing</button>
+                  </div>
+                )}
               </div>
 
-              {/* Integrated AI Chat Sidebar */}
               {showChatSidebar && (
                 <div className="w-96 flex flex-col bg-[#0b1120] animate-in slide-in-from-right duration-300">
                   <div className="h-12 border-b border-slate-800 flex items-center justify-between px-4 bg-[#0f172a]">
-                    <div className="flex items-center gap-2">
-                      <MessageSquare className="w-4 h-4 text-indigo-500" />
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Story Intelligence</span>
-                    </div>
+                    <div className="flex items-center gap-2"><MessageSquare className="w-4 h-4 text-indigo-500" /><span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Story Intelligence</span></div>
                     <button onClick={() => setMessages([])} className="p-1 hover:bg-slate-800 rounded text-slate-600 hover:text-slate-300" title="Clear Thread"><RotateCcw className="w-3.5 h-3.5" /></button>
                   </div>
-
                   <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth scrollbar-hide">
                     {messages.length === 0 && (
                        <div className="h-full flex flex-col items-center justify-center opacity-20 text-center px-8">
                           <div className="w-12 h-12 bg-indigo-500/10 rounded-2xl flex items-center justify-center mb-4"><Zap className="w-6 h-6 text-indigo-400" /></div>
                           <h4 className="text-sm font-bold text-slate-300">AI Context Engine</h4>
-                          <p className="text-[10px] mt-2 leading-relaxed">Ask about Figma links, technical feasibility, or request acceptance criteria suggestions.</p>
+                          <p className="text-[10px] mt-2 leading-relaxed">Ask about Figma links, technical feasibility, or right-click text in the editor to analyze specific parts.</p>
                        </div>
                     )}
                     {messages.map((msg) => (
@@ -634,29 +766,15 @@ const App: React.FC = () => {
                             <div className="w-1 h-1 bg-indigo-400 rounded-full animate-bounce [animation-delay:0.2s]"></div>
                             <div className="w-1 h-1 bg-indigo-400 rounded-full animate-bounce [animation-delay:0.4s]"></div>
                           </div>
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Analyzing context</span>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Analyzing</span>
                         </div>
                       </div>
                     )}
                   </div>
-
                   <div className="p-4 border-t border-slate-800 bg-[#0b1120]">
                     <div className="flex items-end gap-2 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl focus-within:border-indigo-500/50 transition-all">
-                      <textarea 
-                        rows={1} 
-                        value={input} 
-                        onChange={(e) => setInput(e.target.value)} 
-                        onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendMessage())}
-                        placeholder="Discuss story details..." 
-                        className="flex-1 bg-transparent border-none focus:ring-0 text-xs py-2 px-3 resize-none max-h-32" 
-                      />
-                      <button 
-                        onClick={handleSendMessage} 
-                        disabled={!input.trim() || isGenerating}
-                        className="p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white rounded-xl transition-all shadow-lg shadow-indigo-600/20"
-                      >
-                        <Send className="w-4 h-4" />
-                      </button>
+                      <textarea rows={1} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendMessage())} placeholder="Discuss story details..." className="flex-1 bg-transparent border-none focus:ring-0 text-xs py-2 px-3 resize-none max-h-32" />
+                      <button onClick={() => handleSendMessage()} disabled={!input.trim() || isGenerating} className="p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white rounded-xl transition-all shadow-lg shadow-indigo-600/20"><Send className="w-4 h-4" /></button>
                     </div>
                   </div>
                 </div>
@@ -664,100 +782,26 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* Context Panel - Right Side (Only when in Listing or if Chat is off) */}
           {(viewMode === 'listing' || !showChatSidebar) && (
             <div className="w-80 border-l border-slate-800 flex flex-col bg-[#0b1120] hidden xl:flex">
               {showHistory ? (
                   <div className="flex flex-col h-full animate-in slide-in-from-right duration-300">
-                    <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                      <div className="flex items-center gap-2"><History className="w-4 h-4 text-amber-500" /><span className="text-[10px] font-bold uppercase tracking-wider">Timeline</span></div>
-                      <button onClick={() => { setShowHistory(false); setSelectedVersionId(null); }} className="p-1 hover:bg-slate-800 rounded text-slate-500"><X className="w-4 h-4" /></button>
-                    </div>
+                    <div className="p-4 border-b border-slate-800 flex items-center justify-between"><div className="flex items-center gap-2"><History className="w-4 h-4 text-amber-500" /><span className="text-[10px] font-bold uppercase tracking-wider">Timeline</span></div><button onClick={() => { setShowHistory(false); setSelectedVersionId(null); }} className="p-1 hover:bg-slate-800 rounded text-slate-500"><X className="w-4 h-4" /></button></div>
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
                       {versions.map((v) => (
                         <div key={v.id} onClick={() => setSelectedVersionId(v.id)} className={`p-3 rounded-xl border cursor-pointer transition-all ${selectedVersionId === v.id ? 'border-amber-500 bg-amber-500/5' : 'border-slate-800 bg-slate-900/40 hover:border-slate-600'}`}>
-                          <div className="flex items-start gap-3">
-                            <img src={v.authorAvatar} alt={v.authorName} className="w-6 h-6 rounded-full bg-slate-800" />
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between mb-0.5"><p className="text-[10px] font-bold text-slate-200 truncate">{v.authorName}</p><span className="text-[9px] text-slate-500 whitespace-nowrap">{formatTime(v.timestamp)}</span></div>
-                              <p className="text-[11px] text-slate-400 font-medium">{v.label}</p>
-                            </div>
-                          </div>
+                          <div className="flex items-start gap-3"><img src={v.authorAvatar} alt={v.authorName} className="w-6 h-6 rounded-full bg-slate-800" /><div className="flex-1 min-w-0"><div className="flex items-center justify-between mb-0.5"><p className="text-[10px] font-bold text-slate-200 truncate">{v.authorName}</p><span className="text-[9px] text-slate-500 whitespace-nowrap">{formatTime(v.timestamp)}</span></div><p className="text-[11px] text-slate-400 font-medium">{v.label}</p></div></div>
                         </div>
                       ))}
                     </div>
                   </div>
               ) : (
                   <>
-                    <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                      <div className="flex items-center gap-2"><Layers className="w-4 h-4 text-slate-500" /><span className="text-[10px] font-bold uppercase tracking-wider">Context Assets</span></div>
-                      <button onClick={() => setShowFigmaLinkModal(true)} className="p-1 hover:bg-slate-800 rounded text-indigo-400"><Plus className="w-4 h-4" /></button>
-                    </div>
-                    
-                    <div className="flex-1 overflow-y-auto scrollbar-hide">
-                      <div className="p-4 space-y-6">
-                        <div>
-                          <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-2"><div className="w-4 h-4"><Icons.Figma /></div><span className="text-xs font-bold">Figma Designs</span></div>
-                          </div>
-                          {linkedFrames.length === 0 ? (
-                            <div className="p-6 border border-dashed border-slate-800 rounded-xl text-center">
-                              <LinkIcon className="w-6 h-6 text-slate-600 mx-auto mb-2" />
-                              <p className="text-[10px] text-slate-500 mb-4">No designs linked.</p>
-                              <button onClick={() => setShowFigmaLinkModal(true)} className="w-full py-1.5 bg-slate-900 border border-slate-800 text-[10px] font-bold rounded-lg hover:bg-slate-800 transition-colors">Import</button>
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              {linkedFrames.map(frame => (
-                                <div key={frame.id} className="group relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900/50 hover:border-indigo-500/50 transition-all">
-                                  <img src={frame.thumbnail} alt={frame.name} className="w-full h-24 object-cover opacity-60" />
-                                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent"></div>
-                                  <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button onClick={() => unlinkFrame(frame.id)} className="p-1.5 bg-rose-500/20 text-rose-500 rounded-lg"><Trash2 className="w-3 h-3" /></button>
-                                  </div>
-                                  <div className="absolute bottom-2 left-3 font-bold text-[10px]">{frame.name}</div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2 text-amber-500">
-                              <ToyBrick className="w-4 h-4" />
-                              <span className="text-xs font-bold text-slate-200 uppercase tracking-tight">MCP Toolchain</span>
-                            </div>
-                            {mcpStatus === MCPStatus.CONNECTED && (
-                              <button onClick={disconnectMCP} className="text-[8px] uppercase tracking-tighter text-slate-500 hover:text-rose-400 font-bold flex items-center gap-1"><XCircle className="w-2.5 h-2.5" /> Stop</button>
-                            )}
-                          </div>
-
-                          <div className={`p-4 rounded-xl border transition-all duration-700 ${mcpStatus === MCPStatus.CONNECTED ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-900/40'}`}>
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2">
-                                  <div className={`w-2 h-2 rounded-full ${mcpStatus === MCPStatus.CONNECTED ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,1)]' : 'bg-slate-700'}`}></div>
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{mcpStatus}</p>
-                                </div>
-                                <p className="text-xs font-bold text-slate-200 leading-none">{mcpMessage}</p>
-                              </div>
-                              <div className="p-2 bg-slate-800 rounded-xl">
-                                {mcpStatus === MCPStatus.CONNECTED ? <ShieldCheck className="w-4 h-4 text-emerald-500" /> : <WifiOff className="w-4 h-4 text-slate-600" />}
-                              </div>
-                            </div>
-
-                            <div className="mt-4 flex gap-2">
-                              {mcpStatus === MCPStatus.DISCONNECTED ? (
-                                <button onClick={connectMCP} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-indigo-600/20">Connect</button>
-                              ) : (
-                                <div className="flex-1 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center justify-center gap-2"><Activity className="w-3 h-3 animate-pulse" /> Established</div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <div className="p-4 border-b border-slate-800 flex items-center justify-between"><div className="flex items-center gap-2"><Layers className="w-4 h-4 text-slate-500" /><span className="text-[10px] font-bold uppercase tracking-wider">Context Assets</span></div><button onClick={() => setShowFigmaLinkModal(true)} className="p-1 hover:bg-slate-800 rounded text-indigo-400"><Plus className="w-4 h-4" /></button></div>
+                    <div className="flex-1 overflow-y-auto scrollbar-hide"><div className="p-4 space-y-6"><div><div className="flex items-center justify-between mb-4"><div className="flex items-center gap-2"><div className="w-4 h-4"><Icons.Figma /></div><span className="text-xs font-bold">Figma Designs</span></div></div>
+                    {linkedFrames.length === 0 ? (<div className="p-6 border border-dashed border-slate-800 rounded-xl text-center"><LinkIcon className="w-6 h-6 text-slate-600 mx-auto mb-2" /><p className="text-[10px] text-slate-500 mb-4">No designs linked.</p><button onClick={() => setShowFigmaLinkModal(true)} className="w-full py-1.5 bg-slate-900 border border-slate-800 text-[10px] font-bold rounded-lg hover:bg-slate-800 transition-colors">Import</button></div>) : (<div className="space-y-3">{linkedFrames.map(frame => (<div key={frame.id} className="group relative rounded-xl overflow-hidden border border-slate-800 bg-slate-900/50 hover:border-indigo-500/50 transition-all"><img src={frame.thumbnail} alt={frame.name} className="w-full h-24 object-cover opacity-60" /><div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent"></div><div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => unlinkFrame(frame.id)} className="p-1.5 bg-rose-500/20 text-rose-500 rounded-lg"><Trash2 className="w-3 h-3" /></button></div><div className="absolute bottom-2 left-3 font-bold text-[10px]">{frame.name}</div></div>))}</div>)}</div>
+                    <div className="space-y-3"><div className="flex items-center justify-between mb-1"><div className="flex items-center gap-2 text-amber-500"><ToyBrick className="w-4 h-4" /><span className="text-xs font-bold text-slate-200 uppercase tracking-tight">MCP Toolchain</span></div>{mcpStatus === MCPStatus.CONNECTED && (<button onClick={disconnectMCP} className="text-[8px] uppercase tracking-tighter text-slate-500 hover:text-rose-400 font-bold flex items-center gap-1"><XCircle className="w-2.5 h-2.5" /> Stop</button>)}</div>
+                    <div className={`p-4 rounded-xl border transition-all duration-700 ${mcpStatus === MCPStatus.CONNECTED ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-900/40'}`}><div className="flex items-start justify-between mb-3"><div className="space-y-1"><div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${mcpStatus === MCPStatus.CONNECTED ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,1)]' : 'bg-slate-700'}`}></div><p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{mcpStatus}</p></div><p className="text-xs font-bold text-slate-200 leading-none">{mcpMessage}</p></div><div className="p-2 bg-slate-800 rounded-xl">{mcpStatus === MCPStatus.CONNECTED ? <ShieldCheck className="w-4 h-4 text-emerald-500" /> : <WifiOff className="w-4 h-4 text-slate-600" />}</div></div><div className="mt-4 flex gap-2">{mcpStatus === MCPStatus.DISCONNECTED ? (<button onClick={connectMCP} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black uppercase tracking-widest rounded-lg shadow-lg shadow-indigo-600/20">Connect</button>) : (<div className="flex-1 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center justify-center gap-2"><Activity className="w-3 h-3 animate-pulse" /> Established</div>)}</div></div></div></div></div>
                   </>
               )}
             </div>
@@ -765,37 +809,25 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* Figma Link Modal */}
       {showFigmaLinkModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-[#0b1120] border border-slate-800 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-300">
             <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-slate-900/40">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 flex items-center justify-center bg-slate-800 rounded-lg shadow-inner"><Icons.Figma /></div>
-                <div><h3 className="text-lg font-bold">Figma Browser</h3><p className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Link design with specs</p></div>
-              </div>
-              <button onClick={() => setShowFigmaLinkModal(false)} className="p-2 hover:bg-slate-800 rounded-xl text-slate-500 hover:text-white transition-all"><X className="w-6 h-6" /></button>
+              <div className="flex items-center gap-3"><div className="w-8 h-8 flex items-center justify-center bg-slate-800 rounded-lg shadow-inner"><Icons.Figma /></div><div><h3 className="text-lg font-bold">Figma Browser</h3><p className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Link design with specs</p></div></div><button onClick={() => setShowFigmaLinkModal(false)} className="p-2 hover:bg-slate-800 rounded-xl text-slate-500 hover:text-white transition-all"><X className="w-6 h-6" /></button>
             </div>
-
             <div className="flex-1 flex overflow-hidden">
               <div className="w-72 border-r border-slate-800 p-6 flex flex-col gap-6 bg-slate-900/20">
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Source File</label>
-                    <div className="relative">
-                      <input type="text" value={figmaUrl} onChange={(e) => setFigmaUrl(e.target.value)} placeholder="Paste Figma URL..." className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-3 pr-10 text-xs" />
-                      <button onClick={fetchFigmaFrames} disabled={!figmaUrl || isFetchingFigma} className="absolute right-1.5 top-1.5 p-1 bg-indigo-600 rounded-lg">
-                        {isFetchingFigma ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                      </button>
+                    <div className="relative"><input type="text" value={figmaUrl} onChange={(e) => setFigmaUrl(e.target.value)} placeholder="Paste Figma URL..." className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 pl-3 pr-10 text-xs" />
+                      <button onClick={fetchFigmaFrames} disabled={!figmaUrl || isFetchingFigma} className="absolute right-1.5 top-1.5 p-1 bg-indigo-600 rounded-lg">{isFetchingFigma ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}</button>
                     </div>
                   </div>
                 </div>
               </div>
-
               <div className="flex-1 overflow-y-auto p-6 bg-slate-950/20">
-                {!figmaFile ? (
-                  <div className="h-full flex flex-col items-center justify-center opacity-40"><LinkIcon className="w-12 h-12 mb-4" /><p className="text-xs">Enter a Figma URL to start browsing.</p></div>
-                ) : (
+                {!figmaFile ? (<div className="h-full flex flex-col items-center justify-center opacity-40"><LinkIcon className="w-12 h-12 mb-4" /><p className="text-xs">Enter a Figma URL to start browsing.</p></div>) : (
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-6">
                     {filteredFrames.map(frame => {
                       const isLinked = !!linkedFrames.find(f => f.id === frame.id);
@@ -804,8 +836,7 @@ const App: React.FC = () => {
                           <div className="h-32 bg-slate-800 overflow-hidden"><img src={frame.thumbnail} alt={frame.name} className="w-full h-full object-cover opacity-80" /></div>
                           <div className="p-3">
                             <span className="text-xs font-bold text-slate-200 truncate block mb-3">{frame.name}</span>
-                            <div className="grid grid-cols-2 gap-2">
-                              <button onClick={() => isLinked ? unlinkFrame(frame.id) : linkFrame(frame)} className={`py-1.5 rounded-lg text-[9px] font-bold ${isLinked ? 'bg-rose-500/10 text-rose-500' : 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20'}`}>{isLinked ? 'Unlink' : 'Link'}</button>
+                            <div className="grid grid-cols-2 gap-2"><button onClick={() => isLinked ? unlinkFrame(frame.id) : linkFrame(frame)} className={`py-1.5 rounded-lg text-[9px] font-bold ${isLinked ? 'bg-rose-500/10 text-rose-500' : 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20'}`}>{isLinked ? 'Unlink' : 'Link'}</button>
                               <button onClick={() => insertFrameReference(frame)} className="py-1.5 bg-slate-950 border border-slate-800 text-slate-300 rounded-lg text-[9px] font-bold">Ref</button>
                             </div>
                           </div>
